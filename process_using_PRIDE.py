@@ -18,6 +18,8 @@ import datetime
 import pathlib
 import sys
 
+from typing import Sequence
+
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -27,7 +29,7 @@ import numpy as np
 from PRIDE_helper_functions import plot_kin_xyz, plot_geometric_ranges
 from PRIDE_helper_functions import load_csv, load_kin, receiver_clock_file
 from PRIDE_helper_functions import geometric_ranges, apply_corrections_ionosphere
-from PRIDE_helper_functions import attach_geometric_residuals, plot_carrier_residuals
+from PRIDE_helper_functions import attach_geometric_residuals, plot_carrier_residuals, plot_code_residuals
 from PRIDE_helper_functions import plot_carrier_residuals
 import gnsspy as gp
 
@@ -51,6 +53,31 @@ def save_object(obj, file_path):
 def load_object(file_path):
     with Path(file_path).open("rb") as f:
         return pickle.load(f)
+
+def load_receiver_clocks(paths: Sequence[pathlib.Path | str]) -> pd.DataFrame:
+    """Load and merge multiple PRIDE receiver clock files into a single DataFrame."""
+    frames: list[pd.DataFrame] = []
+    for candidate in paths:
+        candidate_path = pathlib.Path(candidate)
+        if not candidate_path.exists():
+            continue
+        df = receiver_clock_file(candidate_path, add_datetime=True)
+        if df.empty or "gps_datetime" not in df.columns:
+            continue
+        frames.append(df)
+
+    if not frames:
+        tried = ", ".join(str(p) for p in paths)
+        raise FileNotFoundError(f"No receiver clock files found in: {tried}")
+
+    combined = (
+        pd.concat(frames, ignore_index=True)
+        .dropna(subset=["gps_datetime"])
+        .sort_values("gps_datetime")
+        .drop_duplicates(subset="gps_datetime", keep="last")
+        .reset_index(drop=True)
+    )
+    return combined
 # -----------------------------------------------------------------------------
 # CLI helper
 # -----------------------------------------------------------------------------
@@ -78,9 +105,13 @@ if __name__ == "__main__":
     kin = load_kin(kin_path)
 
     plot_kin_xyz(kin, title="PRIDE Kinematic ECEF")
-    rck_df_1 = receiver_clock_file(r"C:\Users\Benjamin Nold\OneDrive\WindBorne\data\PRIDE-PPP\2025\171\rck_2025171_balo", add_datetime=True)
-    rck_df_2 = receiver_clock_file(r"C:\Users\Benjamin Nold\OneDrive\WindBorne\data\PRIDE-PPP\2025\171-172\rck_2025171_balo", add_datetime=True)
-    rck_df =  pd.concat([rck_df_1, rck_df_2], axis=0, ignore_index=False)
+    rck_paths = [
+        Path(r"C:\Users\Benjamin Nold\OneDrive\WindBorne\data\2025\171-172\rck_2025171_balo"),
+        Path(r"C:\Users\Benjamin Nold\OneDrive\WindBorne\data\PRIDE-PPP\2025\171-172\rck_2025171_balo"),
+        Path(r"C:\Users\Benjamin Nold\OneDrive\WindBorne\data\PRIDE-PPP\2025\171\rck_2025171_balo"),
+        Path("PRIDE_output") / "rck_2025171_balo",
+    ]
+    rck_df = load_receiver_clocks(rck_paths)
     fig = plt.figure()
     plt.plot(rck_df.gps_datetime, rck_df.RCK_GPS)
     
@@ -125,7 +156,12 @@ if __name__ == "__main__":
     plot_geometric_ranges(rng, title="Geometric ranges by satellite")
     
     
-    pr_if_df = apply_corrections_ionosphere(obs, rx_clk=rck_df, sat_clk=sat_clk_df)
+    pr_if_df = apply_corrections_ionosphere(
+        obs,
+        rx_clk=rck_df,
+        sat_clk=sat_clk_df,
+        rx_clk_interpolate_missing=True,
+    )
     pr_if_df = attach_geometric_residuals(pr_if_df, rng, tolerance_s=0.1)
     
     temp = pr_if_df[pr_if_df.sat == 'G04']
@@ -139,6 +175,8 @@ if __name__ == "__main__":
         title="Carrier IF (clk-corrected) - Geometric range"
     )
     plot_carrier_residuals(pr_if_df, title="Carrier IF (clk-corrected) - Geometric range")
+    plot_code_residuals(pr_if_df, title="Code IF (clk-corrected) - Geometric range")
+  
     
     ## WTF is going on here
     
@@ -147,3 +185,4 @@ if __name__ == "__main__":
     errors_df, axes = plot_satellite_ecef_errors(
         pos, ecef_df, svs=['G04'], title="Selected SV ECEF errors"
         )
+

@@ -506,6 +506,7 @@ def apply_corrections_ionosphere(
     rx_clk: Optional[pd.DataFrame] = None,
     sat_clk: Optional[pd.DataFrame] = None,
     clock_tolerance_s: float = 0.25,
+    rx_clk_interpolate_missing: bool = True,
 ) -> pd.DataFrame:
     """Compute ionosphere-free code pseudorange from a georinex Dataset.
 
@@ -519,6 +520,9 @@ def apply_corrections_ionosphere(
     code_if_m, carrier_if_m, f1_hz, f2_hz,
     code_obs1, code_obs2, carrier_obs1, carrier_obs2,
     and if clocks provided: rx_clk_m, sat_clk_m, code_if_clk_m, carrier_if_clk_m.
+    Receiver clock values of exactly 0.0 metres are treated as missing; set
+    ``rx_clk_interpolate_missing=True`` to fill gaps via time interpolation
+    before merging into the observation epochs.
     """
 
     if not isinstance(obs, xr.Dataset):
@@ -649,28 +653,47 @@ def apply_corrections_ionosphere(
             left = out[out["sat"].str.startswith(prefix)].sort_values("time").copy()
             if left.empty or col not in rck.columns:
                 continue
-            right = rck[["gps_datetime", col]].dropna(subset=[col]).rename(columns={"gps_datetime": "clk_time", col: "rx_clk_val"})
+            right = (
+                rck[["gps_datetime", col]]
+                .rename(columns={"gps_datetime": "clk_time", col: "rx_clk_val"})
+                .copy()
+            )
+            right["clk_time"] = pd.to_datetime(right["clk_time"], errors="coerce")
+            right["rx_clk_val"] = pd.to_numeric(right["rx_clk_val"], errors="coerce")
+            right.loc[right["rx_clk_val"] == 0.0, "rx_clk_val"] = np.nan
+            right = right.dropna(subset=["clk_time"])
             if right.empty:
+                continue
+            right_sorted = right.sort_values("clk_time")
+            if rx_clk_interpolate_missing and right_sorted["rx_clk_val"].notna().sum() >= 2:
+                right_interp = right_sorted.set_index("clk_time")
+                right_interp["rx_clk_val"] = right_interp["rx_clk_val"].interpolate(
+                    method="time", limit_direction="both"
+                )
+                right_sorted = right_interp.reset_index()
+            if right_sorted["rx_clk_val"].notna().sum() == 0:
                 continue
             # Preserve original indices to map back after merge
             left = left.assign(_idx=left.index)
             merged = pd.merge_asof(
                 left,
-                right.sort_values("clk_time"),
+                right_sorted,
                 left_on="time",
                 right_on="clk_time",
                 direction="nearest",
                 tolerance=pd.to_timedelta(clock_tolerance_s, unit="s"),
             )
-            # Map back using original indices
             idx = merged["_idx"].to_numpy()
-            # Only accept matches within tolerance explicitly (merge_asof already applies tolerance, keep dt for diagnostics)
             dt_s = (merged["time"] - merged["clk_time"]).abs().dt.total_seconds()
-            vals = merged.get("rx_clk_val").to_numpy()
-            mask = np.isfinite(dt_s)
-            fill_vals = np.where(mask, np.nan_to_num(vals, nan=0.0), 0.0)
+            vals = merged["rx_clk_val"].to_numpy(dtype=float)
+            dt_arr = dt_s.to_numpy(dtype=float)
+            fill_vals = np.full(vals.shape, np.nan, dtype=float)
+            dt_out = np.full(vals.shape, np.nan, dtype=float)
+            mask = np.isfinite(vals) & np.isfinite(dt_arr)
+            fill_vals[mask] = vals[mask]
+            dt_out[mask] = dt_arr[mask]
             out.loc[idx, "rx_clk_m"] = fill_vals
-            out.loc[idx, "rx_clk_dt_s"] = np.where(mask, dt_s.to_numpy(), np.nan)
+            out.loc[idx, "rx_clk_dt_s"] = dt_out
 
     # -------------------------
     # Satellite clock correction with interpolation per PRN
