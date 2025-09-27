@@ -78,6 +78,10 @@ def load_receiver_clocks(paths: Sequence[pathlib.Path | str]) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     return combined
+
+
+
+            
 # -----------------------------------------------------------------------------
 # CLI helper
 # -----------------------------------------------------------------------------
@@ -101,7 +105,7 @@ if __name__ == "__main__":
 
     # ------------------------------------------------------------------
 
-    pos = load_csv(res_path)
+    #pos = load_csv(res_path)
     kin = load_kin(kin_path)
 
     plot_kin_xyz(kin, title="PRIDE Kinematic ECEF")
@@ -161,15 +165,21 @@ if __name__ == "__main__":
         rx_clk=rck_df,
         sat_clk=sat_clk_df,
         rx_clk_interpolate_missing=True,
+        rx_clk_interpolate_to_obs=True,
     )
     pr_if_df = attach_geometric_residuals(pr_if_df, rng, tolerance_s=0.1)
     
-    temp = pr_if_df[pr_if_df.sat == 'G04']
-   
-    row_interest = pr_if_df.sat == 'G01'
+    fig, ax = plt.subplots()
+    sc = ax.scatter(pr_if_df.time, pr_if_df.rx_clk_m, picker=True)
+
+    
+
+    
     plt.figure()
-    plt.plot(pr_if_df.time[row_interest], pr_if_df.carrier_minus_geom_m[row_interest]) 
-   
+    plt.plot(pr_if_df.time, pr_if_df.code_if_m)
+
+    
+    
     ax = plot_carrier_residuals(
         pr_if_df,  # after attach_geometric_residuals
         title="Carrier IF (clk-corrected) - Geometric range"

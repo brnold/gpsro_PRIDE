@@ -507,6 +507,7 @@ def apply_corrections_ionosphere(
     sat_clk: Optional[pd.DataFrame] = None,
     clock_tolerance_s: float = 0.25,
     rx_clk_interpolate_missing: bool = True,
+    rx_clk_interpolate_to_obs: bool = False,
 ) -> pd.DataFrame:
     """Compute ionosphere-free code pseudorange from a georinex Dataset.
 
@@ -521,8 +522,9 @@ def apply_corrections_ionosphere(
     code_obs1, code_obs2, carrier_obs1, carrier_obs2,
     and if clocks provided: rx_clk_m, sat_clk_m, code_if_clk_m, carrier_if_clk_m.
     Receiver clock values of exactly 0.0 metres are treated as missing; set
-    ``rx_clk_interpolate_missing=True`` to fill gaps via time interpolation
-    before merging into the observation epochs.
+    ``rx_clk_interpolate_missing=True`` to fill gaps via time interpolation, or
+    ``rx_clk_interpolate_to_obs=True`` to interpolate the clock directly at
+    observation epochs before merging into the result.
     """
 
     if not isinstance(obs, xr.Dataset):
@@ -671,10 +673,32 @@ def apply_corrections_ionosphere(
                     method="time", limit_direction="both"
                 )
                 right_sorted = right_interp.reset_index()
-            if right_sorted["rx_clk_val"].notna().sum() == 0:
+            valid = right_sorted["rx_clk_val"].notna()
+            if valid.sum() == 0:
                 continue
-            # Preserve original indices to map back after merge
             left = left.assign(_idx=left.index)
+            if rx_clk_interpolate_to_obs:
+                obs_times = pd.to_datetime(left["time"], errors="coerce")
+                obs_sec = obs_times.astype("int64").to_numpy(dtype=float) / 1e9
+                clk_sec = right_sorted.loc[valid, "clk_time"].astype("int64").to_numpy(dtype=float) / 1e9
+                clk_vals = right_sorted.loc[valid, "rx_clk_val"].to_numpy(dtype=float)
+                if clk_sec.size < 2:
+                    continue
+                interp_vals = np.interp(obs_sec, clk_sec, clk_vals, left=np.nan, right=np.nan)
+                insert_idx = np.searchsorted(clk_sec, obs_sec)
+                prev_idx = np.clip(insert_idx - 1, 0, clk_sec.size - 1)
+                next_idx = np.clip(insert_idx, 0, clk_sec.size - 1)
+                diff_prev = np.abs(obs_sec - clk_sec[prev_idx])
+                diff_next = np.abs(obs_sec - clk_sec[next_idx])
+                min_diff = np.minimum(diff_prev, diff_next)
+                mask_obs = np.isfinite(interp_vals) & (min_diff <= clock_tolerance_s)
+                fill_vals = np.full(obs_sec.shape, np.nan, dtype=float)
+                dt_out = np.full(obs_sec.shape, np.nan, dtype=float)
+                fill_vals[mask_obs] = interp_vals[mask_obs]
+                dt_out[mask_obs] = 0.0
+                out.loc[left["_idx"], "rx_clk_m"] = fill_vals
+                out.loc[left["_idx"], "rx_clk_dt_s"] = dt_out
+                continue
             merged = pd.merge_asof(
                 left,
                 right_sorted,
