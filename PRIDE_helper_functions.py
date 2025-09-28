@@ -941,6 +941,7 @@ def plot_carrier_residuals(
     value_col: str = "carrier_clk_minus_geom_m",
     title: Optional[str] = None,
     figsize: tuple[int, int] = (12, 6),
+    satellites: Optional[Union[str, Sequence[str]]] = None,
 ):
     """Plot carrier clock-corrected IF minus geometric range for each satellite.
 
@@ -959,6 +960,9 @@ def plot_carrier_residuals(
         Optional plot title.
     figsize : tuple[int, int]
         Matplotlib figure size.
+    satellites : str | Sequence[str] | None
+        Optional satellite identifiers to include in the plot. Rows where
+        sat_col does not match are dropped.
     """
 
     import matplotlib.pyplot as plt
@@ -973,7 +977,24 @@ def plot_carrier_residuals(
     data = df.copy()
     data[time_col] = pd.to_datetime(data[time_col], errors="coerce")
     data = data.dropna(subset=[time_col, value_col, sat_col])
+
+    sat_filter = None
+    if satellites is not None:
+        if isinstance(satellites, (str, bytes)):
+            sat_filter = [satellites]
+        else:
+            sat_filter = list(dict.fromkeys(satellites))
+        if not sat_filter:
+            raise ValueError("No satellite identifiers provided in 'satellites'")
+        data = data[data[sat_col].isin(sat_filter)]
+
     if data.empty:
+        if sat_filter is not None:
+            requested = ", ".join(map(str, sat_filter))
+            raise ValueError(
+                "No valid rows to plot after dropping NaNs for satellites: "
+                f"{requested}"
+            )
         raise ValueError("No valid rows to plot after dropping NaNs")
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -1000,6 +1021,7 @@ def plot_code_residuals(
     value_col: str = "code_clk_minus_geom_m",
     title: Optional[str] = None,
     figsize: tuple[int, int] = (12, 6),
+    satellites: Optional[Union[str, Sequence[str]]] = None,
 ):
     """Plot code IF (clock-corrected) minus geometric range for each satellite.
 
@@ -1018,6 +1040,9 @@ def plot_code_residuals(
         Optional plot title.
     figsize : tuple[int, int]
         Matplotlib figure size.
+    satellites : str | Sequence[str] | None
+        Optional satellite identifiers to include in the plot. Rows where
+        sat_col does not match are dropped.
     """
 
     import matplotlib.pyplot as plt
@@ -1032,7 +1057,24 @@ def plot_code_residuals(
     data = df.copy()
     data[time_col] = pd.to_datetime(data[time_col], errors="coerce")
     data = data.dropna(subset=[time_col, value_col, sat_col])
+
+    sat_filter = None
+    if satellites is not None:
+        if isinstance(satellites, (str, bytes)):
+            sat_filter = [satellites]
+        else:
+            sat_filter = list(dict.fromkeys(satellites))
+        if not sat_filter:
+            raise ValueError("No satellite identifiers provided in 'satellites'")
+        data = data[data[sat_col].isin(sat_filter)]
+
     if data.empty:
+        if sat_filter is not None:
+            requested = ", ".join(map(str, sat_filter))
+            raise ValueError(
+                "No valid rows to plot after dropping NaNs for satellites: "
+                f"{requested}"
+            )
         raise ValueError("No valid rows to plot after dropping NaNs")
 
     fig, ax = plt.subplots(figsize=figsize)
